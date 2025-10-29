@@ -1,2 +1,0 @@
-FLASK_ENV=development
-DB_URI=mysql+pymysql://root:LamineYamal10!@localhost:3306/country_exchange_db
