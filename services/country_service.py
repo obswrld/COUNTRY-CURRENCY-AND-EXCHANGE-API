@@ -2,7 +2,11 @@ import os
 import io
 import random
 from datetime import datetime
+from tkinter import Image
+
 import requests
+from PIL import Image, ImageDraw, ImageFont
+
 from models.country_models import Country
 from repositories.country_repo import CountryRepo
 from models.country_models import db
@@ -122,3 +126,121 @@ class CountryService:
         rates_map = {str(k).upper(): v for k, v in (rates.items() if isinstance(rates, dict) else[])}
 
         last_refreshed = datetime.datetime.now()
+
+        try:
+            with db.session.begin():
+                total = 0
+                for c in countries_data:
+                    name = c.get('name')
+                    capital = c.get('capital')
+                    region = c.get('region')
+                    population = c.get('population')
+                    flag_url = c.get('flag_url')
+                    currencies = c.get('currencies') or []
+                    if currencies and isinstance(currencies, list) and len(currencies) > 0:
+                        first = currencies[0]
+                        currency_code = first.get("code") if isinstance(first, dict) else None
+                        if currency_code:
+                            currency_code = currency_code.upper()
+                    else:
+                        currency_code = None
+
+                    exchange_rate = None
+                    estimated_gdp = None
+
+                    if not currency_code:
+                        exchange_rate = None
+                        estimated_gdp = 0
+                    else:
+                        rate = rates_map.get(currency_code)
+                        if rate is None:
+                            exchange_rate = None
+                            estimated_gdp = None
+                        else:
+                            exchange_rate = float(rate)
+                            try:
+                                pop_val = int(population) if population is not None else 0
+                            except Exception:
+                                pop_val = 0
+                                multiplier = random.randint(1000, 2000)
+
+                                if exchange_rate == 0:
+                                    estimated_gdp = None
+                                else:
+                                    estimated_gdp = (pop_val * multiplier) / exchange_rate
+
+                    country_payload = {
+                        "name": name,
+                        "capital": capital,
+                        "region": region,
+                        "population": population,
+                        "currency_code": currency_code,
+                        "exchange_rate": exchange_rate,
+                        "estimated_gdp": estimated_gdp,
+                        "flag_url": flag_url
+                    }
+                    CountryRepo.upsert_country_by_name(country_payload, last_refreshed)
+                    total += 1
+
+                CountryRepo.upsert_country_by_name(total, last_refreshed)
+        except Exception as e:
+            return {"error": "Internal server error", "details": str(e)}, 500
+
+        try:
+            CountryService.generate_summary_image(last_refreshed)
+        except Exception as e:
+            return {"message": "Countries refreshed successfully", "total": total, "warning":f"image generation failed: {str(e)}"}, 200
+        return {"message": "Countries refreshed successfully", "total": total}, 200
+
+
+    @staticmethod
+    def generate_summary_image(last_refreshed):
+        os.makedirs(CACHE_DIR, exist_ok=True)
+        total = db.session.query(Country).count()
+        top5 = Country.query.filter(
+            Country.estimated_gdb is not None).order_by(Country.estimated_gdb.desc()).limit(5).all()
+        width, height = 1000, 600
+        img = Image.new("RGB", (width, height), color=(255, 255, 255))
+        draw = ImageDraw.Draw(img)
+
+        try:
+            font_title = ImageFont.truetype("arial.ttf", 36)
+            font_text = ImageFont.truetype("arial.ttf", 20)
+        except Exception:
+            font_title = ImageFont.load_default()
+            font_text = ImageFont.load_default()
+
+        y = 30
+        draw.text((40, y), "Countries Summary", font=font_title, fill=(0, 0, 0))
+        y += 50
+        draw.text((40, y), f"Last refreshed at (UTC): {last_refreshed.isoformat()} ", font=font_text, fill=(0, 0, 0))
+        y += 30
+        draw.text((40, y), f"Total countries: {total}", font=font_text, fill=(0, 0, 0))
+        y += 40
+        draw.text((40, y), "Top 5 by estimated GDP:", font=font_text, fill=(0, 0, 0))
+        y += 30
+
+        if not top5:
+            draw.text((60, y), "No GDP data available", font=font_text, fill=(128, 0, 0))
+        else:
+            for i, c in enumerate(top5, start=1):
+                gdp_str = f"{c.estimated_gdp:,.2f}" if c.estimated_gdp is not None else "N/A"
+                draw.text((60, y), f"{i}. {c.name} — {gdp_str}", font=font_text, fill=(0, 0, 0))
+                y += 26
+
+
+        img.save(SUMMARY_IMAGE_PATH, format="PNG")
+
+    @staticmethod
+    def get_status():
+        info = CountryRepo.get_refreshed_info()
+        if not info:
+            return {"total_countries": 0, "last_refreshed": None}, 200
+        return {"total_countries" : info.total_countries or 0, "last_refreshed": info.last_refreshed.isoformat() if info.last_refresh else None}, 200
+
+    @staticmethod
+    def get_summary_image_path():
+        if os.path.exists(SUMMARY_IMAGE_PATH):
+            return SUMMARY_IMAGE_PATH
+        return None
+
