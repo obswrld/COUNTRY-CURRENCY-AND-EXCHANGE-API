@@ -56,7 +56,7 @@ class CountryRepo:
         name = country_data.get("name")
         if not name:
             return None
-        existing_country = Country.query.filter(func.lower(Country.name) == func.lower()).first()
+        existing_country = Country.query.filter(func.lower(Country.name) == func.lower(name)).first()
         if existing_country:
             existing_country.capital = country_data.get("capital")
             existing_country.region = country_data.get("region")

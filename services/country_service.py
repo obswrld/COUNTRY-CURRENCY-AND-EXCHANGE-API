@@ -2,15 +2,9 @@ import os
 import io
 import random
 from datetime import datetime
-from tkinter import Image
-
 import requests
 from PIL import Image, ImageDraw, ImageFont
-
-from models.country_models import Country
-from repositories.country_repo import CountryRepo
-from models.country_models import db
-
+from models.country_models import Country, db
 from repositories.country_repo import CountryRepo
 from country_schema.country_schema import CountrySchema
 
@@ -113,7 +107,8 @@ class CountryService:
             countries_resp.raise_for_status()
             countries_data = countries_resp.json()
         except Exception as e:
-            return {"error":"External data source unavailable", "details":f" Could not fetch data from restcountries API: {str(e)}"}, 503
+            return {"error":"External data source unavailable",
+                    "details":f" Could not fetch data from restcountries API: {str(e)}"}, 503
 
         try:
             exchange_resp = requests.get(EXCHANGE_API, timeout=15)
@@ -125,7 +120,7 @@ class CountryService:
 
         rates_map = {str(k).upper(): v for k, v in (rates.items() if isinstance(rates, dict) else[])}
 
-        last_refreshed = datetime.datetime.now()
+        last_refreshed = datetime.now()
 
         try:
             with db.session.begin():
@@ -135,7 +130,7 @@ class CountryService:
                     capital = c.get('capital')
                     region = c.get('region')
                     population = c.get('population')
-                    flag_url = c.get('flag_url')
+                    flag_url = c.get('flag')
                     currencies = c.get('currencies') or []
                     if currencies and isinstance(currencies, list) and len(currencies) > 0:
                         first = currencies[0]
@@ -148,26 +143,18 @@ class CountryService:
                     exchange_rate = None
                     estimated_gdp = None
 
-                    if not currency_code:
-                        exchange_rate = None
-                        estimated_gdp = 0
-                    else:
-                        rate = rates_map.get(currency_code)
-                        if rate is None:
-                            exchange_rate = None
+                    if not currency_code and currency_code in rates_map:
+                        exchange_rate = float(rates_map[currency_code])
+                        try:
+                            pop_val = int(population) if population else 0
+                        except Exception:
+                            pop_val = 0
+
+                        multiplier = random.randint(1000,2000)
+                        if exchange_rate == 0:
                             estimated_gdp = None
                         else:
-                            exchange_rate = float(rate)
-                            try:
-                                pop_val = int(population) if population is not None else 0
-                            except Exception:
-                                pop_val = 0
-                                multiplier = random.randint(1000, 2000)
-
-                                if exchange_rate == 0:
-                                    estimated_gdp = None
-                                else:
-                                    estimated_gdp = (pop_val * multiplier) / exchange_rate
+                            estimated_gdp = (pop_val * multiplier) / exchange_rate
 
                     country_payload = {
                         "name": name,
@@ -181,8 +168,6 @@ class CountryService:
                     }
                     CountryRepo.upsert_country_by_name(country_payload, last_refreshed)
                     total += 1
-
-                CountryRepo.upsert_country_by_name(total, last_refreshed)
         except Exception as e:
             return {"error": "Internal server error", "details": str(e)}, 500
 
@@ -198,7 +183,7 @@ class CountryService:
         os.makedirs(CACHE_DIR, exist_ok=True)
         total = db.session.query(Country).count()
         top5 = Country.query.filter(
-            Country.estimated_gdb is not None).order_by(Country.estimated_gdb.desc()).limit(5).all()
+            Country.estimated_gdp.isnot(None)).order_by(Country.estimated_gdp.desc()).limit(5).all()
         width, height = 1000, 600
         img = Image.new("RGB", (width, height), color=(255, 255, 255))
         draw = ImageDraw.Draw(img)
@@ -236,7 +221,7 @@ class CountryService:
         info = CountryRepo.get_refreshed_info()
         if not info:
             return {"total_countries": 0, "last_refreshed": None}, 200
-        return {"total_countries" : info.total_countries or 0, "last_refreshed": info.last_refreshed.isoformat() if info.last_refresh else None}, 200
+        return {"total_countries" : info.total_countries or 0, "last_refreshed": info.last_refreshed.isoformat() if info.last_refreshed else None}, 200
 
     @staticmethod
     def get_summary_image_path():

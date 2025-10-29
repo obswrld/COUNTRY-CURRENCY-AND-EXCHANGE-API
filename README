@@ -1,0 +1,10 @@
+# 🌍 Country Currency and Exchange API
+
+A Flask-based API that provides country information, currency codes, and exchange rates.
+It allows you to refresh country data from an external API and view a generated summary image.
+
+---
+
+Environment Variables (.env Example)
+
+
